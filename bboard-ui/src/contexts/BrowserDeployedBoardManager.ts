@@ -37,11 +37,12 @@ import {
 } from 'rxjs';
 import { pipe as fnPipe } from 'fp-ts/function';
 import { type Logger } from 'pino';
-import { ConnectedAPI, type InitialAPI } from '@midnight-ntwrk/dapp-connector-api';
+import { type ConnectedAPI, type InitialAPI } from '@midnight-ntwrk/dapp-connector-api';
+import { createWalletClient } from 'midnight-wallet-connector';
+import semver from 'semver';
 import { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-config-provider';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
-import semver from 'semver';
 import {
   Binding,
   FinalizedTransaction,
@@ -220,8 +221,27 @@ export class BrowserDeployedBoardManager implements DeployedBoardAPIProvider {
 /** @internal */
 const initializeProviders = async (logger: Logger): Promise<BBoardProviders> => {
   const networkId = import.meta.env.VITE_NETWORK_ID as NetworkId;
-  const connectedAPI = await connectToWallet(logger, networkId);
-  const zkConfigPath = window.location.origin; // '../../../contract/src/managed/bboard';
+  const walletUrl = import.meta.env.VITE_WALLET_URL as string | undefined;
+
+  // Try WebSocket wallet connector first, fall back to Lace browser extension
+  let connectedAPI: ConnectedAPI;
+  if (walletUrl) {
+    try {
+      logger.info({ walletUrl, networkId }, 'Connecting to wallet via WebSocket');
+      connectedAPI = await createWalletClient({ url: walletUrl, networkId });
+      logger.info('Connected to wallet via WebSocket');
+    } catch (err) {
+      logger.warn({ err }, 'WebSocket wallet not available, falling back to Lace extension');
+      connectedAPI = await connectToWallet(logger, networkId);
+    }
+  } else {
+    connectedAPI = await connectToWallet(logger, networkId);
+  }
+
+  const connectionStatus = await connectedAPI.getConnectionStatus();
+  logger.info(connectionStatus, 'Wallet connector API enabled status');
+
+  const zkConfigPath = window.location.origin;
   const keyMaterialProvider = new FetchZkConfigProvider<BBoardCircuitKeys>(zkConfigPath, fetch.bind(window));
   const config = await connectedAPI.getConfiguration();
   const inMemoryBBoardPrivateStateProvider = inMemoryPrivateStateProvider<string, BBoardPrivateState>();
